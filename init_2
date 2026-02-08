@@ -10,7 +10,6 @@ BASE_PATH = r"D:\2026_BAU"
 EXCEL_PATH = r"D:\2026_BAU\releases.xlsx"
 SHEET_NAME = "Sheet1"
 
-# Categories used in the dashboard
 CATEGORIES = [
     "1. File Folder",
     "2. Test",
@@ -24,7 +23,42 @@ CATEGORIES = [
 ]
 
 # ==========================
-# FUNCTIONS
+# DATE NORMALIZATION
+# ==========================
+
+def normalize_release_date(value):
+    """
+    Converts Excel date (string, datetime, or float) into YYYYMMDD.
+    Returns None if it cannot be parsed.
+    """
+    # Try direct datetime parsing
+    try:
+        dt = pd.to_datetime(value, errors="raise")
+        return dt.strftime("%Y%m%d")
+    except:
+        pass
+
+    # Try Excel serial number
+    try:
+        if isinstance(value, (int, float)):
+            dt = pd.to_datetime("1899-12-30") + pd.to_timedelta(int(value), unit="D")
+            return dt.strftime("%Y%m%d")
+    except:
+        pass
+
+    # Try string cleanup
+    try:
+        cleaned = str(value).split(" ")[0].replace("-", "").replace("/", "")
+        if len(cleaned) == 8 and cleaned.isdigit():
+            return cleaned
+    except:
+        pass
+
+    print(f"WARNING: Could not parse release date: {value}")
+    return None
+
+# ==========================
+# FOLDER CREATION
 # ==========================
 
 def create_folder(path):
@@ -39,10 +73,7 @@ def create_metadata_json(dr_path, title, status):
     metadata_path = os.path.join(dr_path, "metadata.json")
 
     if not os.path.exists(metadata_path):
-        metadata = {
-            "Title": title,
-            "Status": status
-        }
+        metadata = {"Title": title, "Status": status}
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=4)
         print(f"Created metadata.json in {dr_path}")
@@ -50,8 +81,8 @@ def create_metadata_json(dr_path, title, status):
         print(f"metadata.json already exists in {dr_path}")
 
 
-def create_release_structure(release_name, dr_rows):
-    release_path = os.path.join(BASE_PATH, release_name)
+def create_release_structure(release_folder_name, dr_rows):
+    release_path = os.path.join(BASE_PATH, release_folder_name)
     create_folder(release_path)
 
     for index, row in enumerate(dr_rows, start=1):
@@ -70,8 +101,7 @@ def create_release_structure(release_name, dr_rows):
 
         create_metadata_json(dr_path, title, status)
 
-    print(f"\nRelease {release_name} structure completed.\n")
-
+    print(f"\nRelease {release_folder_name} structure completed.\n")
 
 # ==========================
 # MAIN
@@ -80,16 +110,18 @@ def create_release_structure(release_name, dr_rows):
 def main():
     df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
 
-    # Filter only releases starting with "2026"
-    df_2026 = df[df["Requested Release"].astype(str).str.startswith("2026")]
+    # Normalize release dates
+    df["ReleaseFolder"] = df["Requested Release"].apply(normalize_release_date)
 
-    # Group DRs by release
-    releases = df_2026.groupby("Requested Release")
+    # Filter only valid 2026 releases
+    df_2026 = df[df["ReleaseFolder"].notna() & df["ReleaseFolder"].str.startswith("2026")]
 
-    for release_name, group in releases:
-        print(f"Processing release: {release_name}")
+    releases = df_2026.groupby("ReleaseFolder")
+
+    for release_folder_name, group in releases:
+        print(f"Processing release: {release_folder_name}")
         dr_rows = group.to_dict("records")
-        create_release_structure(str(release_name), dr_rows)
+        create_release_structure(release_folder_name, dr_rows)
 
     print("\nAll 2026 releases processed successfully.")
 
