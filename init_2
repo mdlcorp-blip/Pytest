@@ -1,0 +1,98 @@
+import os
+import json
+import pandas as pd
+
+# ==========================
+# CONFIGURATION
+# ==========================
+
+BASE_PATH = r"D:\2026_BAU"
+EXCEL_PATH = r"D:\2026_BAU\releases.xlsx"
+SHEET_NAME = "Sheet1"
+
+# Categories used in the dashboard
+CATEGORIES = [
+    "1. File Folder",
+    "2. Test",
+    "6. Planning",
+    "7. Developer Github Activity",
+    "8b. Code Source Control",
+    "9a. Integration Testing and Signoff",
+    "9a. Launch Approval - L5",
+    "10. Production Deployment",
+    "11. Business PIV"
+]
+
+# ==========================
+# FUNCTIONS
+# ==========================
+
+def create_folder(path):
+    if not os.path.exists(path):
+        os.makedirs(path)
+        print(f"Created: {path}")
+    else:
+        print(f"Exists:  {path}")
+
+
+def create_metadata_json(dr_path, title, status):
+    metadata_path = os.path.join(dr_path, "metadata.json")
+
+    if not os.path.exists(metadata_path):
+        metadata = {
+            "Title": title,
+            "Status": status
+        }
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=4)
+        print(f"Created metadata.json in {dr_path}")
+    else:
+        print(f"metadata.json already exists in {dr_path}")
+
+
+def create_release_structure(release_name, dr_rows):
+    release_path = os.path.join(BASE_PATH, release_name)
+    create_folder(release_path)
+
+    for index, row in enumerate(dr_rows, start=1):
+        dr_id = row["ID"]
+        title = row["Title"]
+        status = row["Status"]
+
+        dr_folder_name = f"{index}. {dr_id}"
+        dr_path = os.path.join(release_path, dr_folder_name)
+
+        create_folder(dr_path)
+
+        for category in CATEGORIES:
+            category_path = os.path.join(dr_path, category)
+            create_folder(category_path)
+
+        create_metadata_json(dr_path, title, status)
+
+    print(f"\nRelease {release_name} structure completed.\n")
+
+
+# ==========================
+# MAIN
+# ==========================
+
+def main():
+    df = pd.read_excel(EXCEL_PATH, sheet_name=SHEET_NAME)
+
+    # Filter only releases starting with "2026"
+    df_2026 = df[df["Requested Release"].astype(str).str.startswith("2026")]
+
+    # Group DRs by release
+    releases = df_2026.groupby("Requested Release")
+
+    for release_name, group in releases:
+        print(f"Processing release: {release_name}")
+        dr_rows = group.to_dict("records")
+        create_release_structure(str(release_name), dr_rows)
+
+    print("\nAll 2026 releases processed successfully.")
+
+
+if __name__ == "__main__":
+    main()
