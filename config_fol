@@ -1,0 +1,92 @@
+import os
+import json
+import pandas as pd
+import datetime
+
+# =========================
+# CONFIG
+# =========================
+
+EXCEL_PATH = r"D:\2026_BAU\sharepoint_data.xlsx"
+OUTPUT_ROOT = r"D:\2026_BAU"
+
+# Folder structure to create inside each DR
+SUBFOLDERS = [
+    "1. File Folder",
+    "2. Test",
+    "6. Planning",
+    "7. Developer Github Activity",
+    "8b. Code Source Control",
+    "9a. Integration Testing and Signoff",
+    "9a. Launch Approval - L5",
+    "10. Production Deployment",
+    "11. Business PIV"
+]
+
+# =========================
+# LOAD EXCEL
+# =========================
+
+df = pd.read_excel(EXCEL_PATH)
+
+required_cols = [
+    "ID", "Title", "Status", "Requested Release",
+    "DR Lead", "PVI Lead", "Business Contact"
+]
+
+missing = [c for c in required_cols if c not in df.columns]
+if missing:
+    raise ValueError(f"Missing required columns: {missing}")
+
+# =========================
+# PROCESS EACH ROW
+# =========================
+
+for _, row in df.iterrows():
+    dr_id = str(row["ID"]).strip()
+    release_date = str(row["Requested Release"]).strip()
+
+    # Create the date folder
+    date_folder = os.path.join(OUTPUT_ROOT, release_date)
+    os.makedirs(date_folder, exist_ok=True)
+
+    # Create the DR folder inside the date folder
+    dr_folder = os.path.join(date_folder, f"1. DR{dr_id}")
+    os.makedirs(dr_folder, exist_ok=True)
+
+    # Create subfolders inside the DR folder
+    for sub in SUBFOLDERS:
+        os.makedirs(os.path.join(dr_folder, sub), exist_ok=True)
+
+    # Path to metadata.json
+    metadata_path = os.path.join(dr_folder, "metadata.json")
+
+    # Current timestamp
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+
+    # If metadata.json already exists, load it to preserve createdAt
+    if os.path.exists(metadata_path):
+        with open(metadata_path, "r", encoding="utf-8") as f:
+            existing_metadata = json.load(f)
+        created_at = existing_metadata.get("createdAt", now)
+    else:
+        created_at = now  # First time creation
+
+    # Build updated metadata
+    metadata = {
+        "ID": row["ID"],
+        "Title": row["Title"],
+        "Status": row["Status"],
+        "RequestedRelease": row["Requested Release"],
+        "DRLead": row["DR Lead"],
+        "PVILead": row["PVI Lead"],
+        "BusinessContact": row["Business Contact"],
+        "createdAt": created_at,
+        "updatedAt": now
+    }
+
+    # Write metadata.json
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=4)
+
+print("Date folders, DR folders, and metadata.json files created/updated successfully.")
