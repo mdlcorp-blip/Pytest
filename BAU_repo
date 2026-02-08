@@ -1,0 +1,336 @@
+import os
+import re
+import json
+import datetime
+
+# =========================
+# CONFIG
+# =========================
+
+PROJECT_ROOT = r"D:\2026_BAU"
+
+OUTPUT_GROUPED = r"D:\2026_BAU\DR_Dashboard_Grouped.html"
+OUTPUT_FLAT = r"D:\2026_BAU\DR_Dashboard_Flat.html"
+
+# Solo mostramos TITLE por ahora
+METADATA_COLUMNS = ["Title"]
+
+METADATA_LABELS = {
+    "Title": "Title"
+}
+
+CATEGORY_LABELS = {}
+
+
+# =========================
+# IDENTIFICACIÓN DE CARPETAS
+# =========================
+
+def is_release_folder(name: str) -> bool:
+    return bool(re.match(r"^\d{8}$", name))
+
+
+def is_dr_folder(name: str) -> bool:
+    return name.upper().startswith("1. DR")
+
+
+def natural_key(name):
+    match = re.match(r"(\d+)", name)
+    if match:
+        return int(match.group(1))
+    return float('inf')
+
+
+# =========================
+# LECTURA DE ESTRUCTURA
+# =========================
+
+def get_release_folders(root_path):
+    releases = []
+    for name in os.listdir(root_path):
+        full = os.path.join(root_path, name)
+        if os.path.isdir(full) and is_release_folder(name):
+            releases.append(name)
+    return sorted(releases)
+
+
+def get_dr_folders(release_path):
+    drs = []
+    for name in os.listdir(release_path):
+        full = os.path.join(release_path, name)
+        if os.path.isdir(full) and is_dr_folder(name):
+            drs.append(name)
+    return sorted(drs, key=natural_key)
+
+
+def get_categories(dr_path):
+    cats = []
+    for name in os.listdir(dr_path):
+        full = os.path.join(dr_path, name)
+        if os.path.isdir(full) and not name.lower().endswith(".json"):
+            cats.append(name)
+    return sorted(cats, key=natural_key)
+
+
+def build_category_cell(category_path):
+    files = [
+        f for f in os.listdir(category_path)
+        if os.path.isfile(os.path.join(category_path, f))
+    ]
+
+    link_path = category_path.replace("\\", "/")
+    open_link = f'<a href="file:///{link_path}" target="_blank">📁 Open Folder</a>'
+
+    if not files:
+        return (
+            f'<span style="color:red;">❌ Missing</span><br>'
+            f'<a href="file:///{link_path}" target="_blank">⬆️ Upload Here</a>'
+        )
+    else:
+        file_links = []
+        for f in sorted(files):
+            file_path = os.path.join(category_path, f).replace("\\", "/")
+            file_links.append(
+                f'<div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:360px;">'
+                f'<a href="file:///{file_path}" title="{f}" target="_blank">{f}</a>'
+                f'</div>'
+            )
+
+        return "".join(file_links) + open_link
+
+
+def scan_structure(project_root):
+    rows_flat = []
+    grouped = {}
+    all_categories = set()
+
+    releases = get_release_folders(project_root)
+
+    for release in releases:
+        release_path = os.path.join(project_root, release)
+        dr_folders = get_dr_folders(release_path)
+
+        grouped[release] = []
+
+        for dr in dr_folders:
+            dr_path = os.path.join(release_path, dr)
+
+            # Leer metadata.json
+            metadata_path = os.path.join(dr_path, "metadata.json")
+            metadata = {}
+            if os.path.exists(metadata_path):
+                with open(metadata_path, "r", encoding="utf-8") as f:
+                    metadata = json.load(f)
+
+            categories = get_categories(dr_path)
+
+            row = {
+                "release": release,
+                "dr": dr,
+                "metadata": metadata,
+                "categories": {}
+            }
+
+            for cat in categories:
+                cat_path = os.path.join(dr_path, cat)
+                cell = build_category_cell(cat_path)
+                row["categories"][cat] = cell
+                all_categories.add(cat)
+
+            rows_flat.append(row)
+            grouped[release].append(row)
+
+    return rows_flat, sorted(all_categories, key=natural_key), grouped
+
+
+# =========================
+# HTML
+# =========================
+
+def html_header(title):
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8'>
+<title>{title}</title>
+<style>
+    body {{ font-family: Arial, sans-serif; font-size: 14px; }}
+    h1 {{ font-size: 24px; }}
+    h2 {{ margin-top: 40px; }}
+
+    table {{
+        border-collapse: collapse;
+        width: 100%;
+        margin-bottom: 30px;
+        table-layout: fixed;   /* ⭐ Consistencia total */
+    }}
+
+    th {{
+        background-color: #f2f2f2;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        font-weight: bold;
+        padding: 6px 8px;
+    }}
+
+    td {{
+        border: 1px solid #ccc;
+        padding: 6px 8px;
+        vertical-align: top;
+    }}
+
+    /* Metadata: más pequeño */
+    .meta-cell {{
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+        width: 200px;   /* ⭐ Fijo */
+    }}
+
+    /* Categorías: más ancho */
+    .cat-cell {{
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        width: 380px;   /* ⭐ Fijo */
+    }}
+
+    /* DR y Release */
+    .dr-col {{
+        white-space: nowrap;
+        font-weight: bold;
+        width: 140px;   /* ⭐ Fijo */
+    }}
+
+    .release-col {{
+        white-space: nowrap;
+        width: 140px;   /* ⭐ Fijo */
+    }}
+
+    /* Fila completa OK */
+    .row-complete {{
+        background-color: #d4f8d4 !important;
+    }}
+
+    tr:nth-child(even):not(.row-complete) {{ background-color: #fafafa; }}
+
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+<p><b>Generated:</b> {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")}</p>
+"""
+
+
+def html_footer():
+    return "</body></html>"
+
+
+def row_is_complete(row, all_categories):
+    """Devuelve True si NO hay ningún Missing."""
+    for cat in all_categories:
+        cell = row["categories"].get(cat, "")
+        if "❌ Missing" in cell:
+            return False
+    return True
+
+
+def generate_grouped_dashboard(grouped, all_categories, output_path):
+    html = [html_header("📊 DR Dashboard (Grouped by Release)")]
+
+    for release, rows in grouped.items():
+        html.append(f"<h2>📅 {release}</h2>")
+        html.append("<table>")
+
+        # Header
+        html.append("<tr><th class='dr-col'>DR</th>")
+        for col in METADATA_COLUMNS:
+            html.append(f"<th class='meta-cell'>{METADATA_LABELS.get(col, col)}</th>")
+        for cat in all_categories:
+            html.append(f"<th class='cat-cell'>{cat}</th>")
+        html.append("</tr>")
+
+        # Rows
+        for row in rows:
+            complete = row_is_complete(row, all_categories)
+            row_class = "row-complete" if complete else ""
+
+            html.append(f"<tr class='{row_class}'>")
+            html.append(f"<td class='dr-col'>{row['dr']}</td>")
+
+            for col in METADATA_COLUMNS:
+                value = row["metadata"].get(col, "")
+                html.append(f"<td class='meta-cell'>{value}</td>")
+
+            for cat in all_categories:
+                cell = row["categories"].get(cat, '<span style="color:red;">❌ Missing</span>')
+                html.append(f"<td class='cat-cell'>{cell}</td>")
+
+            html.append("</tr>")
+
+        html.append("</table>")
+
+    html.append(html_footer())
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(html))
+
+
+def generate_flat_dashboard(rows_flat, all_categories, output_path):
+    html = [html_header("📊 DR Dashboard (Flat Table)")]
+
+    html.append("<table>")
+    html.append("<tr><th class='release-col'>Release</th><th class='dr-col'>DR</th>")
+
+    for col in METADATA_COLUMNS:
+        html.append(f"<th class='meta-cell'>{METADATA_LABELS.get(col, col)}</th>")
+
+    for cat in all_categories:
+        html.append(f"<th class='cat-cell'>{cat}</th>")
+
+    html.append("</tr>")
+
+    for row in rows_flat:
+        complete = row_is_complete(row, all_categories)
+        row_class = "row-complete" if complete else ""
+
+        html.append(f"<tr class='{row_class}'>")
+        html.append(f"<td class='release-col'>{row['release']}</td>")
+        html.append(f"<td class='dr-col'>{row['dr']}</td>")
+
+        for col in METADATA_COLUMNS:
+            value = row["metadata"].get(col, "")
+            html.append(f"<td class='meta-cell'>{value}</td>")
+
+        for cat in all_categories:
+            cell = row["categories"].get(cat, '<span style="color:red;">❌ Missing</span>')
+            html.append(f"<td class='cat-cell'>{cell}</td>")
+
+        html.append("</tr>")
+
+    html.append("</table>")
+    html.append(html_footer())
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(html))
+
+
+# =========================
+# MAIN
+# =========================
+
+def main():
+    rows_flat, all_categories, grouped = scan_structure(PROJECT_ROOT)
+
+    generate_grouped_dashboard(grouped, all_categories, OUTPUT_GROUPED)
+    generate_flat_dashboard(rows_flat, all_categories, OUTPUT_FLAT)
+
+    print("Dashboards generated:")
+    print(" -", OUTPUT_GROUPED)
+    print(" -", OUTPUT_FLAT)
+
+
+if __name__ == "__main__":
+    main()
