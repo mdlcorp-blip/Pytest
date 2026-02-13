@@ -1,0 +1,381 @@
+import os
+import json
+import copy
+
+TESTCASES_DIR = "."
+OUTPUT_PREFIX = "viewer_"
+
+
+def load_json(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def find_test_cases(folder):
+    files = [f for f in os.listdir(folder) if f.lower().endswith(".json")]
+
+    requests = [
+        f for f in files
+        if not f.startswith("Result for ") and not f.endswith(" after.json")
+    ]
+
+    test_cases = {}
+
+    for req in requests:
+        base = req[:-5]
+        before = f"Result for {base}.json"
+        after = f"Result for {base} after.json"
+
+        if before in files and after in files:
+            test_cases[base] = {
+                "requestFile": req,
+                "beforeFile": before,
+                "afterFile": after,
+                "request": load_json(os.path.join(folder, req)),
+                "before": load_json(os.path.join(folder, before)),
+                "after": load_json(os.path.join(folder, after)),
+            }
+
+    return test_cases
+
+
+def merge_missing(before, after):
+    """
+    Ensures both BEFORE and AFTER have identical structure.
+    Missing fields become null (MISSING2).
+    """
+
+    def merge(a, b):
+        if isinstance(a, dict) and isinstance(b, dict):
+            keys = set(a.keys()) | set(b.keys())
+            out_a = {}
+            out_b = {}
+            for k in keys:
+                va = a.get(k, None)
+                vb = b.get(k, None)
+                if isinstance(va, dict) and isinstance(vb, dict):
+                    ma, mb = merge(va, vb)
+                    out_a[k] = ma
+                    out_b[k] = mb
+                else:
+                    out_a[k] = va if va is not None else None
+                    out_b[k] = vb if vb is not None else None
+            return out_a, out_b
+
+        return a, b
+
+    return merge(before, after)
+
+
+def generate_html(name, tc):
+    before_aligned, after_aligned = merge_missing(
+        copy.deepcopy(tc["before"]),
+        copy.deepcopy(tc["after"])
+    )
+
+    js_request = json.dumps(tc["request"], ensure_ascii=False)
+    js_before = json.dumps(before_aligned, ensure_ascii=False)
+    js_after = json.dumps(after_aligned, ensure_ascii=False)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Viewer - {name}</title>
+
+<style>
+body {{
+    font-family: Arial, sans-serif;
+    padding: 20px;
+}}
+
+.tabs {{
+    display: flex;
+    border-bottom: 2px solid #ccc;
+    margin-bottom: 10px;
+}}
+
+.tab {{
+    padding: 10px 20px;
+    cursor: pointer;
+    border: 1px solid #ccc;
+    border-bottom: none;
+    background: #eee;
+    margin-right: 5px;
+}}
+
+.tab.active {{
+    background: white;
+    font-weight: bold;
+}}
+
+.tab-content {{
+    display: none;
+}}
+
+.tab-content.active {{
+    display: block;
+}}
+
+.layout {{
+    display: flex;
+    gap: 20px;
+}}
+
+.selector-col {{
+    width: 20%;
+    min-width: 200px;
+}}
+
+.viewer-col {{
+    width: 40%;
+}}
+
+.req-selector-col {{
+    width: 30%;
+}}
+
+.req-viewer-col {{
+    width: 70%;
+}}
+
+.panel {{
+    border: 1px solid #ccc;
+    padding: 10px;
+    background: #f9f9f9;
+}}
+
+.tree-node {{
+    margin-left: 16px;
+}}
+
+.toggle {{
+    cursor: pointer;
+    font-weight: bold;
+    color: #0077cc;
+    margin-right: 4px;
+}}
+
+pre {{
+    background: #f7f7f7;
+    padding: 8px;
+    border: 1px solid #ccc;
+    overflow-x: auto;
+    white-space: pre;
+}}
+
+.field-label {{
+    font-family: monospace;
+}}
+
+.checkbox-node {{
+    margin: 2px 0;
+}}
+</style>
+
+<script>
+var REQUEST = {js_request};
+var BEFORE = {js_before};
+var AFTER = {js_after};
+
+function createElement(tag, attrs, text) {{
+    var el = document.createElement(tag);
+    if (attrs) {{
+        for (var k in attrs) {{
+            if (k === "class") el.className = attrs[k];
+            else if (k === "onclick") el.onclick = attrs[k];
+            else el.setAttribute(k, attrs[k]);
+        }}
+    }}
+    if (text !== undefined && text !== null) {{
+        el.appendChild(document.createTextNode(text));
+    }}
+    return el;
+}}
+
+function pathToId(prefix, path) {{
+    return prefix + "_" + path.join("__");
+}}
+
+function buildSelectorTree(container, obj, path, callback) {{
+    if (obj !== null && typeof obj === "object" && !Array.isArray(obj)) {{
+        Object.keys(obj).forEach(function(key) {{
+            var childPath = path.concat([key]);
+            var value = obj[key];
+
+            var node = createElement("div", {{class: "tree-node"}});
+            var id = pathToId("sel", childPath);
+
+            var cb = createElement("input", {{type: "checkbox"}});
+            cb.checked = true;
+            cb.onclick = function() {{
+                callback(childPath, cb.checked);
+            }};
+
+            var label = createElement("span", {{class: "field-label"}}, " " + key);
+
+            var row = createElement("div", {{class: "checkbox-node"}});
+            row.appendChild(cb);
+            row.appendChild(label);
+            node.appendChild(row);
+
+            if (value !== null && typeof value === "object") {{
+                buildSelectorTree(node, value, childPath, callback);
+            }}
+
+            container.appendChild(node);
+        }});
+    }}
+}}
+
+function buildJsonView(container, obj, prefix, path) {{
+    if (obj !== null && typeof obj === "object" && !Array.isArray(obj)) {{
+        Object.keys(obj).forEach(function(key) {{
+            var childPath = path.concat([key]);
+            var value = obj[key];
+            var id = pathToId(prefix, childPath);
+
+            var wrapper = createElement("div", {{id: id, class: "panel"}});
+            var label = createElement("div", {{class: "field-label"}}, childPath.join("."));
+            wrapper.appendChild(label);
+
+            var pre = createElement("pre");
+            pre.textContent = JSON.stringify(value, null, 2);
+            wrapper.appendChild(pre);
+
+            container.appendChild(wrapper);
+
+            if (value !== null && typeof value === "object") {{
+                buildJsonView(container, value, prefix, childPath);
+            }}
+        }});
+    }}
+}}
+
+function hideField(prefix, path, visible) {{
+    var id = pathToId(prefix, path);
+    var el = document.getElementById(id);
+    if (el) {{
+        el.style.display = visible ? "block" : "none";
+    }}
+}}
+
+function hideRecursive(prefix, obj, path, visible) {{
+    hideField(prefix, path, visible);
+
+    if (obj !== null && typeof obj === "object") {{
+        Object.keys(obj).forEach(function(key) {{
+            hideRecursive(prefix, obj[key], path.concat([key]), visible);
+        }});
+    }}
+}}
+
+function applySharedHide(path, visible) {{
+    hideRecursive("before", BEFORE, path, visible);
+    hideRecursive("after", AFTER, path, visible);
+}}
+
+function render() {{
+    var reqSel = document.getElementById("reqSelector");
+    var reqView = document.getElementById("reqViewer");
+
+    var sharedSel = document.getElementById("sharedSelector");
+    var beforeView = document.getElementById("beforeViewer");
+    var afterView = document.getElementById("afterViewer");
+
+    reqSel.innerHTML = "";
+    reqView.innerHTML = "";
+    sharedSel.innerHTML = "";
+    beforeView.innerHTML = "";
+    afterView.innerHTML = "";
+
+    buildSelectorTree(reqSel, REQUEST, [], function(path, visible) {{
+        hideRecursive("req", REQUEST, path, visible);
+    }});
+
+    buildJsonView(reqView, REQUEST, "req", []);
+
+    buildSelectorTree(sharedSel, BEFORE, [], function(path, visible) {{
+        applySharedHide(path, visible);
+    }});
+
+    buildJsonView(beforeView, BEFORE, "before", []);
+    buildJsonView(afterView, AFTER, "after", []);
+}}
+
+function switchTab(tab) {{
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+
+    document.getElementById("tab_" + tab).classList.add("active");
+    document.getElementById("content_" + tab).classList.add("active");
+}}
+
+window.onload = function() {{
+    render();
+    switchTab("request");
+}};
+</script>
+
+</head>
+<body>
+
+<h2>Test Case: {name}</h2>
+
+<div class="tabs">
+    <div id="tab_request" class="tab active" onclick="switchTab('request')">Request</div>
+    <div id="tab_compare" class="tab" onclick="switchTab('compare')">Current vs After</div>
+</div>
+
+<div id="content_request" class="tab-content active">
+    <div class="layout">
+        <div class="req-selector-col panel">
+            <h3>Request Selector</h3>
+            <div id="reqSelector"></div>
+        </div>
+        <div class="req-viewer-col panel">
+            <h3>Request JSON</h3>
+            <div id="reqViewer"></div>
+        </div>
+    </div>
+</div>
+
+<div id="content_compare" class="tab-content">
+    <div class="layout">
+        <div class="selector-col panel">
+            <h3>Shared Selector</h3>
+            <div id="sharedSelector"></div>
+        </div>
+        <div class="viewer-col panel">
+            <h3>Current (BEFORE)</h3>
+            <div id="beforeViewer"></div>
+        </div>
+        <div class="viewer-col panel">
+            <h3>After</h3>
+            <div id="afterViewer"></div>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
+"""
+    return html
+
+
+def main():
+    test_cases = find_test_cases(TESTCASES_DIR)
+    if not test_cases:
+        print("No test cases found.")
+        return
+
+    for name, tc in test_cases.items():
+        html = generate_html(name, tc)
+        filename = f"{OUTPUT_PREFIX}{name}.html"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"Generated: {filename}")
+
+
+if __name__ == "__main__":
+    main()
